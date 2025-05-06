@@ -29,6 +29,7 @@
     const Button BTN_BACK = {20, 20, 120, 60, "Back"};
     const Button BTN_RECURSIVE = {200, 700, 400, 740, "Recursive Mode"};
     const Button BTN_ITERATIVE = {600, 700, 800, 740, "Iterative Mode"};
+    const Button BTN_MAKE_REQUEST = {362, 350, 662, 420, "Make HTTP Request"};
 
     // DNS Data structures
     struct DNSNode {
@@ -215,19 +216,35 @@
     // Response code descriptions
     std::map<int, std::string> responseDescriptions = {
         {200, "Success: The request was successful"},
+        {201, "Created: The resource was successfully created"},
         {400, "Bad Request: The server could not understand the request"},
         {401, "Unauthorized: Authentication is required"},
-        {404, "Not Found: The requested resource was not found"}
+        {403, "Forbidden: The server refuses to authorize the request"},
+        {404, "Not Found: The requested resource was not found"},
+        {500, "Internal Server Error: Something went wrong on the server"}
     };
 
     // Scene management
-    enum Scene { HOME, DNS, HTTP };
+    enum Scene { HOME, DNS, HTTP, HTTP_REQUEST };
     Scene currentScene = HOME;
 
     // Add these global variables after other globals
     bool isEditingField = false;
     std::string* currentEditingField = nullptr;
     std::string currentEditingLabel;
+
+    // Add animation state for request/response
+    struct RequestAnimation {
+        bool isActive = false;
+        float progress = 0.0f;
+        std::string from;
+        std::string to;
+        bool isRequest;
+        int statusCode;
+        float speed = 0.015f;  // Slower, smoother animation
+    };
+
+    RequestAnimation currentAnimation;
 
     // Helper functions
     void drawText(float x, float y, const std::string& text, void* font = GLUT_BITMAP_HELVETICA_10) {
@@ -472,7 +489,17 @@
         drawText(area.x0 + 10, area.y1 - 40, "Body: " + area.body);
     }
 
-    // Function to process HTTP request and generate response
+    // Function to start request animation
+    void startRequestAnimation(const std::string& from, const std::string& to, bool isRequest, int statusCode) {
+        currentAnimation.isActive = true;
+        currentAnimation.progress = 0.0f;
+        currentAnimation.from = from;
+        currentAnimation.to = to;
+        currentAnimation.isRequest = isRequest;
+        currentAnimation.statusCode = statusCode;
+    }
+
+    // Update processHTTPRequest function
     void processHTTPRequest() {
         // Reset response
         currentResponse = {200, "OK", ""};
@@ -480,6 +507,7 @@
         // Check JWT
         if (currentRequest.jwt != "valid_jwt_token") {
             currentResponse = {401, "Unauthorized", "{\"error\": \"Invalid JWT token\"}"};
+            startRequestAnimation("Client", "Server", true, 401);
             return;
         }
         
@@ -491,12 +519,14 @@
                     "OK",
                     "[{\"id\": 1, \"name\": \"Alice\"}, {\"id\": 2, \"name\": \"Bob\"}]"
                 };
+                startRequestAnimation("Client", "Server", true, 200);
             } else {
                 currentResponse = {
                     404,
                     "Not Found",
                     "{\"error\": \"Resource not found\"}"
                 };
+                startRequestAnimation("Client", "Server", true, 404);
             }
         }
         else if (currentRequest.method == "POST") {
@@ -507,12 +537,14 @@
                         "Bad Request",
                         "{\"error\": \"Invalid JSON format\"}"
                     };
+                    startRequestAnimation("Client", "Server", true, 400);
                 } else {
                     currentResponse = {
                         201,
                         "Created",
                         "{\"id\": 3, \"name\": \"New User\"}"
                     };
+                    startRequestAnimation("Client", "Server", true, 201);
                 }
             }
         }
@@ -523,12 +555,14 @@
                     "OK",
                     "{\"id\": 1, \"name\": \"Updated User\"}"
                 };
+                startRequestAnimation("Client", "Server", true, 200);
             } else {
                 currentResponse = {
                     404,
                     "Not Found",
                     "{\"error\": \"User not found\"}"
                 };
+                startRequestAnimation("Client", "Server", true, 404);
             }
         }
         else if (currentRequest.method == "DELETE") {
@@ -538,12 +572,14 @@
                     "No Content",
                     ""
                 };
+                startRequestAnimation("Client", "Server", true, 204);
             } else {
                 currentResponse = {
                     404,
                     "Not Found",
                     "{\"error\": \"User not found\"}"
                 };
+                startRequestAnimation("Client", "Server", true, 404);
             }
         }
         
@@ -622,25 +658,21 @@
         
         switch (currentScene) {
             case HOME: {
-                glColor3f(1.0f, 1.0f, 0.5f);
-                drawTextLarge(-2.0f, 1.5f, "Network Visualization");
-                drawText(-2.0f, 1.2f, "Select a visualization type below");
-                
+                // Set up projection for home screen
                 glMatrixMode(GL_PROJECTION);
-                glPushMatrix();
                 glLoadIdentity();
                 gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT);
                 glMatrixMode(GL_MODELVIEW);
-                glPushMatrix();
                 glLoadIdentity();
                 
+                // Draw title
+                glColor3f(1.0f, 1.0f, 0.5f);
+                drawTextLarge(WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT - 100, "Network Visualization");
+                drawText(WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT - 130, "Select a visualization type below");
+                
+                // Draw buttons with proper coordinates
                 drawButton(BTN_DNS);
                 drawButton(BTN_HTTP);
-                
-                glPopMatrix();
-                glMatrixMode(GL_PROJECTION);
-                glPopMatrix();
-                glMatrixMode(GL_MODELVIEW);
                 break;
             }
                 
@@ -674,179 +706,86 @@
             }
                 
             case HTTP: {
-                // Set up the viewport and projection first
-                glLoadIdentity();
-                
-                // Draw HTTP visualization
-                glColor3f(1.0f, 1.0f, 0.5f);
-                drawTextLarge(-3.8f, 3.0f, "HTTP Request Flow");
-                
-                // Draw description of current step
-                double cycle = 12.0;  // 12 second cycle
-                double t = fmod(currentTime, cycle) / cycle * http_steps.size();
-                int idx = static_cast<int>(t) % http_steps.size();
-                float frac = t - idx;
-                
-                const auto& step = http_steps[idx];
-                
-                // Draw step information
-                glColor3f(0.9f, 0.9f, 1.0f);
-                drawTextLarge(-3.8f, 2.6f, step.title);
-                glColor3f(1.0f, 1.0f, 1.0f);
-                drawText(-3.5f, 2.3f, step.description);
-                
-                // Draw nodes with adjusted positions
-                std::map<std::string, std::pair<float, float>> http_nodes = {
-                    {"Client", {-2.0f, 0.0f}},
-                    {"LB", {-1.0f, 0.0f}},
-                    {"Server", {0.0f, 0.0f}},
-                    {"App", {1.0f, 0.0f}},
-                    {"DB", {2.0f, 0.0f}}
-                };
-                
-                // Draw nodes with active highlighting and improved visuals
-                for (const auto& [name, pos] : http_nodes) {
-                    bool isActive = (name == step.from || name == step.to);
-                    
-                    // Node color based on type
-                    float r, g, b;
-                    if (name == "Client") {
-                        r = 0.2f; g = 0.6f; b = 1.0f;  // Blue for client
-                    } else if (name == "LB") {
-                        r = 0.8f; g = 0.4f; b = 0.2f;  // Orange for load balancer
-                    } else if (name == "Server") {
-                        r = 0.2f; g = 0.8f; b = 0.4f;  // Green for server
-                    } else if (name == "App") {
-                        r = 0.8f; g = 0.2f; b = 0.8f;  // Purple for app
-                    } else {  // DB
-                        r = 0.8f; g = 0.8f; b = 0.2f;  // Yellow for database
-                    }
-                    
-                    // Make active nodes brighter
-                    if (isActive) {
-                        r = std::min(r + 0.2f, 1.0f);
-                        g = std::min(g + 0.2f, 1.0f);
-                        b = std::min(b + 0.2f, 1.0f);
-                    }
-                    
-                    // Draw node with glow effect
-                    glColor3f(r, g, b);
-                    glPushMatrix();
-                    glTranslatef(pos.first, pos.second, 0);
-                    
-                    // Draw glow
-                    if (isActive) {
-                        glColor4f(r, g, b, 0.3f);
-                        glutSolidSphere(0.25f, 32, 32);
-                    }
-                    
-                    // Draw main node
-                    glColor3f(r, g, b);
-                    glutSolidSphere(0.2f, 32, 32);
-                    
-                    // Draw node border
-                    glColor3f(1.0f, 1.0f, 1.0f);
-                    glutWireSphere(0.21f, 16, 16);
-                    
-                    glPopMatrix();
-                    
-                    // Draw node label with background
-                    glColor3f(0.2f, 0.2f, 0.25f);
-                    float textWidth = name.length() * 0.1f;
-                    glBegin(GL_QUADS);
-                    glVertex2f(pos.first - textWidth/2 - 0.05f, pos.second - 0.4f);
-                    glVertex2f(pos.first + textWidth/2 + 0.05f, pos.second - 0.4f);
-                    glVertex2f(pos.first + textWidth/2 + 0.05f, pos.second - 0.3f);
-                    glVertex2f(pos.first - textWidth/2 - 0.05f, pos.second - 0.3f);
-                    glEnd();
-                    
-                    glColor3f(1.0f, 1.0f, 1.0f);
-                    drawText(pos.first - textWidth/2, pos.second - 0.35f, name);
-                }
-                
-                // Draw animated arrow between active nodes
-                if (http_nodes.count(step.from) && http_nodes.count(step.to)) {
-                    const auto& fromPos = http_nodes[step.from];
-                    const auto& toPos = http_nodes[step.to];
-                    
-                    // Different colors for request vs response
-                    float ar = step.isRequest ? 0.2f : 1.0f;
-                    float ag = step.isRequest ? 0.8f : 0.6f;
-                    float ab = step.isRequest ? 1.0f : 0.2f;
-                    
-                    // Draw arrow with glow
-                    glColor4f(ar, ag, ab, 0.3f);
-                    glLineWidth(6.0f);
-                    glBegin(GL_LINES);
-                    glVertex2f(fromPos.first, fromPos.second);
-                    glVertex2f(toPos.first, toPos.second);
-                    glEnd();
-                    
-                    // Draw main arrow
-                    glColor3f(ar, ag, ab);
-                    glLineWidth(3.0f);
-                    glBegin(GL_LINES);
-                    glVertex2f(fromPos.first, fromPos.second);
-                    glVertex2f(toPos.first, toPos.second);
-                    glEnd();
-                    
-                    // Draw moving packet with trail
-                    float px = fromPos.first + (toPos.first - fromPos.first) * frac;
-                    float py = fromPos.second + (toPos.second - fromPos.second) * frac;
-                    
-                    // Draw packet trail
-                    glColor4f(ar, ag, ab, 0.2f);
-                    glPushMatrix();
-                    glTranslatef(px, py, 0);
-                    glutSolidSphere(0.1f, 16, 16);
-                    glPopMatrix();
-                    
-                    // Draw main packet
-                    glColor3f(ar, ag, ab);
-                    glPushMatrix();
-                    glTranslatef(px, py, 0);
-                    glutSolidSphere(0.08f, 16, 16);
-                    glPopMatrix();
-                    
-                    // Draw packet label with background
-                    glColor3f(0.2f, 0.2f, 0.25f);
-                    std::string label = step.isRequest ? "Request" : "Response";
-                    float labelWidth = label.length() * 0.1f;
-                    glBegin(GL_QUADS);
-                    glVertex2f(px - labelWidth/2 - 0.05f, py + 0.15f);
-                    glVertex2f(px + labelWidth/2 + 0.05f, py + 0.15f);
-                    glVertex2f(px + labelWidth/2 + 0.05f, py + 0.25f);
-                    glVertex2f(px - labelWidth/2 - 0.05f, py + 0.25f);
-                    glEnd();
-                    
-                    glColor3f(1.0f, 1.0f, 1.0f);
-                    drawText(px - labelWidth/2, py + 0.2f, label);
-                }
-                
-                // Draw the HTTP Panel on the right side
+                // Set up projection for HTTP screen
                 glMatrixMode(GL_PROJECTION);
-                glPushMatrix();
                 glLoadIdentity();
                 gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT);
                 glMatrixMode(GL_MODELVIEW);
-                glPushMatrix();
                 glLoadIdentity();
                 
-                // Draw the interactive HTTP panel
+                // Draw title
+                glColor3f(1.0f, 1.0f, 0.5f);
+                drawTextLarge(WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT - 100, "HTTP Request Flow");
+                drawText(WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT - 130, "Visualize HTTP request flow or make a request");
+                
+                // Draw server flow visualization
+                glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT - 200);
+                glMatrixMode(GL_PROJECTION);
+                glLoadIdentity();
+                gluOrtho2D(-4.0f, 4.0f, -3.0f, 3.0f);
+                glMatrixMode(GL_MODELVIEW);
+                glLoadIdentity();
+                
+                // Draw the server flow visualization
+                drawServerFlow(currentTime);
+                
+                // Reset viewport for buttons
+                glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+                glMatrixMode(GL_PROJECTION);
+                glLoadIdentity();
+                gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT);
+                glMatrixMode(GL_MODELVIEW);
+                glLoadIdentity();
+                
+                // Draw buttons
+                drawButton(BTN_BACK);
+                drawButton(BTN_MAKE_REQUEST);
+                break;
+            }
+                
+            case HTTP_REQUEST: {
+                // Set up projection for HTTP request screen
+                glMatrixMode(GL_PROJECTION);
+                glLoadIdentity();
+                gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT);
+                glMatrixMode(GL_MODELVIEW);
+                glLoadIdentity();
+                
+                // Draw title
+                glColor3f(1.0f, 1.0f, 0.5f);
+                drawTextLarge(50, WINDOW_HEIGHT - 50, "HTTP Request Panel");
+                
+                // Draw HTTP panel
                 drawHTTPPanel();
+                
+                // Draw animation area
+                glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT - 300);
+                glMatrixMode(GL_PROJECTION);
+                glLoadIdentity();
+                gluOrtho2D(-4.0f, 4.0f, -3.0f, 3.0f);
+                glMatrixMode(GL_MODELVIEW);
+                glLoadIdentity();
+                
+                // Draw request animation if active
+                if (currentAnimation.isActive) {
+                    drawRequestAnimation();
+                }
+                
+                // Reset viewport for buttons
+                glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+                glMatrixMode(GL_PROJECTION);
+                glLoadIdentity();
+                gluOrtho2D(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT);
+                glMatrixMode(GL_MODELVIEW);
+                glLoadIdentity();
                 
                 // Draw Back button
                 drawButton(BTN_BACK);
-                
-                glPopMatrix();
-                glMatrixMode(GL_PROJECTION);
-                glPopMatrix();
-                glMatrixMode(GL_MODELVIEW);
                 break;
             }
         }
         
-        glutSwapBuffers();
+        glutSwapBuffers();  // Ensure double buffering is used
     }
 
     void reshape(int w, int h) {
@@ -906,15 +845,21 @@
             
             switch (currentScene) {
                 case HOME:
-                    if (x >= BTN_DNS.x0 && x <= BTN_DNS.x1 && y >= BTN_DNS.y0 && y <= BTN_DNS.y1) {
+                    // Check DNS button
+                    if (x >= BTN_DNS.x0 && x <= BTN_DNS.x1 && 
+                        y >= BTN_DNS.y0 && y <= BTN_DNS.y1) {
                         currentScene = DNS;
-                    } else if (x >= BTN_HTTP.x0 && x <= BTN_HTTP.x1 && y >= BTN_HTTP.y0 && y <= BTN_HTTP.y1) {
+                    }
+                    // Check HTTP button
+                    else if (x >= BTN_HTTP.x0 && x <= BTN_HTTP.x1 && 
+                             y >= BTN_HTTP.y0 && y <= BTN_HTTP.y1) {
                         currentScene = HTTP;
                     }
                     break;
                     
                 case DNS:
-                    if (x >= BTN_BACK.x0 && x <= BTN_BACK.x1 && y >= BTN_BACK.y0 && y <= BTN_BACK.y1) {
+                    if (x >= BTN_BACK.x0 && x <= BTN_BACK.x1 && 
+                        y >= BTN_BACK.y0 && y <= BTN_BACK.y1) {
                         currentScene = HOME;
                     } else if (x >= BTN_RECURSIVE.x0 && x <= BTN_RECURSIVE.x1 && 
                               y >= BTN_RECURSIVE.y0 && y <= BTN_RECURSIVE.y1) {
@@ -926,45 +871,55 @@
                     break;
                     
                 case HTTP:
-                    if (x >= BTN_BACK.x0 && x <= BTN_BACK.x1 && y >= BTN_BACK.y0 && y <= BTN_BACK.y1) {
+                    if (x >= BTN_BACK.x0 && x <= BTN_BACK.x1 && 
+                        y >= BTN_BACK.y0 && y <= BTN_BACK.y1) {
                         currentScene = HOME;
                     }
+                    else if (x >= BTN_MAKE_REQUEST.x0 && x <= BTN_MAKE_REQUEST.x1 && 
+                             y >= BTN_MAKE_REQUEST.y0 && y <= BTN_MAKE_REQUEST.y1) {
+                        currentScene = HTTP_REQUEST;
+                    }
+                    break;
+                
+                case HTTP_REQUEST:
+                    if (x >= BTN_BACK.x0 && x <= BTN_BACK.x1 && 
+                        y >= BTN_BACK.y0 && y <= BTN_BACK.y1) {
+                        currentScene = HTTP;
+                    }
                     
-                    // Handle HTTP method buttons
+                    // Handle HTTP panel buttons
                     for (auto& btn : methodButtons) {
-                        if (x >= btn.x0 && x <= btn.x1 && y >= btn.y0 && y <= btn.y1) {
-                            // Deselect all buttons
+                        if (x >= btn.x0 && x <= btn.x1 && 
+                            y >= btn.y0 && y <= btn.y1) {
                             for (auto& b : methodButtons) {
                                 b.isSelected = false;
                             }
-                            // Select clicked button
                             btn.isSelected = true;
                             currentRequest.method = btn.label;
                             break;
                         }
                     }
                     
-                    // Handle URL button - now starts editing
-                    if (x >= urlButton.x0 && x <= urlButton.x1 && y >= urlButton.y0 && y <= urlButton.y1) {
+                    if (x >= urlButton.x0 && x <= urlButton.x1 && 
+                        y >= urlButton.y0 && y <= urlButton.y1) {
                         startEditingField(&currentRequest.url, "URL");
                     }
-                    
-                    // Handle JWT button - now starts editing
-                    if (x >= jwtButton.x0 && x <= jwtButton.x1 && y >= jwtButton.y0 && y <= jwtButton.y1) {
+                    else if (x >= jwtButton.x0 && x <= jwtButton.x1 && 
+                             y >= jwtButton.y0 && y <= jwtButton.y1) {
                         startEditingField(&currentRequest.jwt, "JWT");
                     }
-                    
-                    // Handle JSON button - now starts editing
-                    if (x >= jsonButton.x0 && x <= jsonButton.x1 && y >= jsonButton.y0 && y <= jsonButton.y1) {
+                    else if (x >= jsonButton.x0 && x <= jsonButton.x1 && 
+                             y >= jsonButton.y0 && y <= jsonButton.y1) {
                         startEditingField(&currentRequest.jsonBody, "JSON");
                     }
-                    
-                    // Handle Send button
-                    if (x >= sendButton.x0 && x <= sendButton.x1 && y >= sendButton.y0 && y <= sendButton.y1) {
+                    else if (x >= sendButton.x0 && x <= sendButton.x1 && 
+                             y >= sendButton.y0 && y <= sendButton.y1) {
                         processHTTPRequest();
                     }
                     break;
             }
+            
+            glutPostRedisplay();  // Ensure screen updates after button clicks
         }
     }
 
@@ -973,19 +928,139 @@
         glutTimerFunc(16, timer, 0);  // 60 FPS
     }
 
+    // Add function to draw server flow
+    void drawServerFlow(double currentTime) {
+        // Draw title
+        glColor3f(1.0f, 1.0f, 0.5f);
+        drawTextLarge(-3.8f, 2.5f, "Server Request Flow");
+        
+        // Draw nodes
+        std::map<std::string, std::pair<float, float>> http_nodes = {
+            {"Client", {-2.0f, 0.0f}},
+            {"LB", {-1.0f, 0.0f}},
+            {"Server", {0.0f, 0.0f}},
+            {"App", {1.0f, 0.0f}},
+            {"DB", {2.0f, 0.0f}}
+        };
+        
+        // Draw nodes and connections
+        for (const auto& [name, pos] : http_nodes) {
+            drawNode(pos.first, pos.second, 0.2f, 0.3f, 0.4f, 0.8f);
+            drawText(pos.first - 0.2f, pos.second - 0.3f, name);
+        }
+        
+        // Draw arrows between nodes
+        for (size_t i = 0; i < http_nodes.size() - 1; i++) {
+            auto it1 = std::next(http_nodes.begin(), i);
+            auto it2 = std::next(http_nodes.begin(), i + 1);
+            drawArrow(it1->second.first, it1->second.second,
+                     it2->second.first, it2->second.second,
+                     0.2f, 0.8f, 1.0f);
+        }
+    }
+
+    // Add function to draw request animation
+    void drawRequestAnimation() {
+        // Update animation progress
+        currentAnimation.progress += currentAnimation.speed;
+        if (currentAnimation.progress >= 1.0f) {
+            currentAnimation.isActive = false;
+        }
+        
+        // Draw animation
+        float x1 = -2.0f;
+        float y1 = 0.0f;
+        float x2 = 2.0f;
+        float y2 = 0.0f;
+        
+        // Calculate color based on status code
+        float ar, ag, ab;
+        if (currentAnimation.statusCode >= 200 && currentAnimation.statusCode < 300) {
+            ar = 0.2f; ag = 0.8f; ab = 0.2f;  // Green for success
+        } else if (currentAnimation.statusCode >= 400 && currentAnimation.statusCode < 500) {
+            ar = 0.8f; ag = 0.2f; ab = 0.2f;  // Red for client error
+        } else if (currentAnimation.statusCode >= 500) {
+            ar = 1.0f; ag = 0.6f; ab = 0.2f;  // Orange for server error
+        } else {
+            ar = 0.2f; ag = 0.8f; ab = 1.0f;  // Blue for other
+        }
+        
+        // Draw arrow with glow
+        glColor4f(ar, ag, ab, 0.2f);
+        glLineWidth(8.0f);
+        glBegin(GL_LINES);
+        glVertex2f(x1, y1);
+        glVertex2f(x2, y2);
+        glEnd();
+        
+        // Draw main arrow
+        glColor3f(ar, ag, ab);
+        glLineWidth(4.0f);
+        glBegin(GL_LINES);
+        glVertex2f(x1, y1);
+        glVertex2f(x2, y2);
+        glEnd();
+        
+        // Draw moving packet with trail
+        float px = x1 + (x2 - x1) * currentAnimation.progress;
+        float py = y1 + (y2 - y1) * currentAnimation.progress;
+        
+        // Draw packet trail
+        for (int i = 0; i < 5; i++) {
+            float trailProgress = currentAnimation.progress - (i * 0.05f);
+            if (trailProgress > 0) {
+                float trailX = x1 + (x2 - x1) * trailProgress;
+                float trailY = y1 + (y2 - y1) * trailProgress;
+                glColor4f(ar, ag, ab, 0.1f - (i * 0.02f));
+                glPushMatrix();
+                glTranslatef(trailX, trailY, 0);
+                glutSolidSphere(0.1f - (i * 0.01f), 16, 16);
+                glPopMatrix();
+            }
+        }
+        
+        // Draw main packet
+        glColor3f(ar, ag, ab);
+        glPushMatrix();
+        glTranslatef(px, py, 0);
+        glutSolidSphere(0.08f, 32, 32);
+        glPopMatrix();
+        
+        // Draw status code
+        glColor3f(0.2f, 0.2f, 0.25f);
+        std::string statusText = std::to_string(currentAnimation.statusCode);
+        float textWidth = statusText.length() * 0.1f;
+        glBegin(GL_QUADS);
+        glVertex2f(px - textWidth/2 - 0.05f, py + 0.15f);
+        glVertex2f(px + textWidth/2 + 0.05f, py + 0.15f);
+        glVertex2f(px + textWidth/2 + 0.05f, py + 0.25f);
+        glVertex2f(px - textWidth/2 - 0.05f, py + 0.25f);
+        glEnd();
+        
+        glColor3f(1.0f, 1.0f, 1.0f);
+        drawText(px - textWidth/2, py + 0.2f, statusText);
+    }
+
     int main(int argc, char** argv) {
         glutInit(&argc, argv);
-        glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB);
+        glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);  // Enable double buffering and depth
         glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
         glutCreateWindow("DNS & HTTP Network Visualization");
         
-        glClearColor(0.12f, 0.12f, 0.18f, 1.0f);  // Nice dark blue background
+        glClearColor(0.12f, 0.12f, 0.18f, 1.0f);
+        
+        // Enable smooth shading
+        glShadeModel(GL_SMOOTH);
+        
+        // Enable blending for smooth transparency
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
         glutDisplayFunc(display);
         glutReshapeFunc(reshape);
         glutMouseFunc(mouse);
         glutKeyboardFunc(keyboard);
-        glutTimerFunc(0, timer, 0);
+        glutTimerFunc(16, timer, 0);  // 60 FPS
         
         startTime = glutGet(GLUT_ELAPSED_TIME) / 1000.0;
         
